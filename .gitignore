@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.blender-test/
+*.blend1
+.venv/
+
+# Local Blender preferences and installation snapshots are private.
+backups/blender-profile-before-update-*/
+
+# Release packages exceed GitHub's 100 MB file limit; attach them to GitHub Releases instead.
+dist/*.zip
+
+/open painter test.blend
+# Native packages are assembled by scripts/build_native.py, never committed.
+src/open_painter/native_bridge/bin/
