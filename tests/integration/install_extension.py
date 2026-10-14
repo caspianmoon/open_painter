@@ -140,6 +140,12 @@ assert rendered(ts), shader_preview.diagnostics(bpy.context.scene, ts)
 print('INSTALLED_MATERIAL_DIRECTOR_PASS')
 assert bpy.ops.open_painter.texture_set(action="REFRESH") == {"FINISHED"}
 addon_utils.disable(module, default_set=True)
+assert bpy.ops.extensions.package_uninstall(repo_directory=repo.directory,
+                                           pkg_id="open_painter") == {"FINISHED"}
+assert not (Path(repo.directory) / "open_painter").exists()
+assert not addon_utils.check(module)[1]
+assert not hasattr(bpy.types.Scene, "open_painter")
+assert bpy.data.objects.get("Cube") is not None, "uninstall removed scene data"
 print(
-    "INSTALL PASS: real ZIP installation, extension namespace, enable/disable, material evaluation"
+    "INSTALL PASS: real ZIP installation, extension namespace, enable/disable, material evaluation, uninstall"
 )

@@ -149,6 +149,11 @@ fill and paint layers and a mask, paints a real stroke and saves; phase 2 is a s
 process that reopens the file, exports for Blender and Unreal (the written files equal the Output
 Preview), disables and re-enables the extension and opens the project again. The record lands in
 `.blender-test/clean-install.json` with the Blender version, platform and machine.
+Both phases verify the resolved CONFIG path and every resource override before installation
+or preference writes; the report records that isolation and the active native backend.
+`shelf_library_recovery.py` covers malformed cache metadata, all shelf entry descriptions and
+previews, damaged thumbnail fallback, an explicit rebuild of a damaged asset library, and
+failed background-build feedback with recovery through Refresh Library.
 
 ## Launch audit
 
