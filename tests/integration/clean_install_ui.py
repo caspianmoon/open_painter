@@ -12,9 +12,10 @@ Phase 2 (OP_CLEAN_INSTALL_PHASE=2, a new Blender process): reopen the file; veri
 project state; export Blender maps and Unreal maps; disable and re-enable the extension;
 open the saved project again and verify once more.
 
-    OP_CLEAN_INSTALL_ZIP=dist/open_painter-0.12.2.zip OP_CLEAN_INSTALL_PHASE=1 \
-    BLENDER_USER_RESOURCES=/tmp/fresh blender --factory-startup --enable-event-simulate \
-        --python tests/integration/clean_install_ui.py
+    python3 scripts/run_clean_install.py --package dist/open_painter-0.15.0.zip
+
+Use the launcher: it creates and verifies all resource overrides before either phase
+can install an extension or write preferences.
 """
 import importlib
 import json
@@ -28,6 +29,16 @@ from pathlib import Path
 import bpy
 import addon_utils
 
+# Resolve the existing isolation check without making the checkout's add-on importable.
+# The launcher overrides every resource directory; fail before installation or preference
+# writes if Blender nevertheless resolves CONFIG outside the disposable profile.
+_profile_spec = importlib.util.spec_from_file_location(
+    "blender_test_profile", Path(__file__).resolve().parents[2] / "scripts/blender_test_profile.py")
+_profile_helper = importlib.util.module_from_spec(_profile_spec)
+_profile_spec.loader.exec_module(_profile_helper)
+_profile_evidence = _profile_helper.assert_blender_profile(
+    bpy, os.environ.get("OP_CLEAN_INSTALL_PROFILE"))
+
 PHASE = int(os.environ.get("OP_CLEAN_INSTALL_PHASE", "1"))
 ZIP = Path(os.environ.get("OP_CLEAN_INSTALL_ZIP", ""))
 WORK = Path(os.environ.get("OP_CLEAN_INSTALL_DIR", tempfile.mkdtemp(prefix="op-clean-install-")))
@@ -36,12 +47,14 @@ FILE = WORK / "launch.blend"
 MODULE = "bl_ext.user_default.open_painter"
 assert "open_painter" not in sys.modules, "the source checkout must not be importable in this test"
 report = {"phase": PHASE, "steps": [], "errors": [], "blender": bpy.app.version_string,
-          "profile": os.environ.get("BLENDER_USER_RESOURCES", "")}
+          "profile": os.environ.get("BLENDER_USER_RESOURCES", ""), "isolation": _profile_evidence}
 env = {}
 bpy.context.preferences.view.show_splash = False
 
 
 def finish(status):
+    if MODULE in sys.modules:
+        report["native"] = mod("native_bridge.lifecycle").diagnostics()
     REPORT.write_text(json.dumps(dict(status=status, **report), indent=2))
     print(f"CLEAN_INSTALL_PHASE{PHASE}_{status}", REPORT, flush=True)
     bpy.ops.wm.quit_blender()

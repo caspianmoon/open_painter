@@ -1,5 +1,13 @@
 # Changes
 
+## 0.15.1 — Material library recovery
+
+- Recover from malformed cached library metadata and rebuild damaged asset libraries with Refresh.
+- Show a usable color swatch when a thumbnail cannot be loaded, and clean up temporary images.
+- Report failed background library builds, retain diagnostic logs, and offer Retry Library.
+- Verify isolated Blender profiles before installation tests write preferences.
+- Keep the existing ABI 14 native engine and compiled bindings unchanged on every platform.
+
 ## 0.15.0 — Open source release
 
 Open Painter is free software under the GNU GPL, version 3 or later, developed in the open.

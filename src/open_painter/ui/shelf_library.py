@@ -33,8 +33,24 @@ CATALOGS_FORMAT = 1          # bump when the catalog layout changes: the library
 KEY_TAG = "op-key:"
 CATEGORY_TAG = "op-category:"
 BUILTIN_KINDS = {"FILL", "SMART", "SMART_RECIPE", "SMART_MASK", "FILTER", "BRUSH", "PROCEDURAL", "GEOMETRY"}
+PREVIEWS = Path(__file__).resolve().parents[1] / "assets/previews"
 _process = None
 _manifest = None
+_build_error = ""
+
+
+def error_message():
+    return _build_error
+
+
+def _failed_build(reason):
+    global _build_error
+    from ..utils.logging import logger
+    _build_error = "Materials library unavailable. Use Assets > Refresh Library to retry."
+    logger.error("%s %s", _build_error, reason)
+    for scene in bpy.data.scenes:
+        if hasattr(scene, "open_painter"):
+            scene.open_painter.status = _build_error
 
 
 def package_name():
@@ -73,7 +89,13 @@ def manifest():
         return None
     if _manifest is None or _manifest[0] != stamp:
         try:
-            _manifest = (stamp, json.loads(path.read_text()))
+            data = json.loads(path.read_text())
+            names = data.get("names") if isinstance(data, dict) else None
+            if not isinstance(names, dict) or any(not isinstance(k, str) or not isinstance(v, str)
+                                                  for k, v in names.items()):
+                _manifest = None
+                return None
+            _manifest = (stamp, data)
         except (OSError, ValueError):
             _manifest = None
             return None
@@ -156,13 +178,13 @@ def build(target=None):
     from ..smart_materials.catalog import CATALOG
     target = Path(target) if target else directory()
     target.mkdir(parents=True, exist_ok=True)
-    previews = Path(__file__).resolve().parents[1] / "assets/previews"
     created, names = [], {}
     try:
         for entry in builtin_entries():
             entry_key = key(entry)
             category = KIND_CATEGORY[entry[1]]
             image = bpy.data.images.new(entry[0], width=32, height=32)
+            created.append(image)  # also remove the image if preview loading or tagging fails
             image.generated_color = (*entry[3], 1)
             image[ASSET_KEY] = entry_key
             image[ASSET_CATEGORY_KEY] = category
@@ -171,16 +193,24 @@ def build(target=None):
             image.asset_data.tags.new(KEY_TAG + entry_key, skip_if_exists=True)
             image.asset_data.tags.new(CATEGORY_TAG + category, skip_if_exists=True)
             image.asset_data.catalog_id = CATALOG_IDS[category]   # the shelf's category tab
-            rendered = previews / (entry[0].replace(" ", "_") + ".png")
+            rendered = PREVIEWS / (entry[0].replace(" ", "_") + ".png")
+            loaded_preview = False
             if rendered.exists() and category in {"MATERIALS", "SMART_MATERIALS", "MASKS"}:
-                with bpy.context.temp_override(id=image):
-                    bpy.ops.ed.lib_id_load_custom_preview(filepath=str(rendered))
-            else:
+                try:
+                    with bpy.context.temp_override(id=image):
+                        result = bpy.ops.ed.lib_id_load_custom_preview(filepath=str(rendered))
+                    loaded_preview = result == {"FINISHED"} and all(image.preview.image_size)
+                except (OSError, RuntimeError) as exc:
+                    from ..utils.logging import logger
+                    logger.warning("Material preview unavailable for %s: %s", entry[0], exc)
+            if not loaded_preview:
                 rgba = make_preview(entry)
+                if category in {"MATERIALS", "SMART_MATERIALS"}:
+                    rgba[..., :3] = entry[3]
+                    image["open_painter_preview_kind"] = "COLOR_SWATCH"
                 preview = image.preview_ensure()
                 preview.image_size = (rgba.shape[1], rgba.shape[0])
                 preview.image_pixels_float = rgba.ravel()
-            created.append(image)
             names[image.name] = entry_key
         path = target / LIBRARY_FILE
         bpy.data.libraries.write(str(path), set(created), fake_user=True, compress=True)
@@ -210,14 +240,14 @@ def register_library():
     return entry
 
 
-def ensure(background=None):
+def ensure(background=None, *, force=False):
     """Register the library and (re)build it when this version's catalog is not on disk.
 
     A foreground Blender builds in a separate background process so the artist's
     session stays clean and undisturbed; a background Blender (tests, batch
     jobs) builds in place. Returns True when the library is ready now.
     """
-    global _process
+    global _process, _build_error
     forget_facts()
     if not isinstance(bpy.data, bpy.types.BlendData):
         # Registration at startup keeps bpy.data restricted (a headless render, an extension
@@ -229,12 +259,18 @@ def ensure(background=None):
     except Exception as exc:   # preferences can be read-only (factory startup); the shelf still works from LOCAL
         from ..utils.logging import logger
         logger.debug("Shelf library registration skipped: %s", exc)
-    if current():
+    if not force and current():
+        _build_error = ""
         return True
     if background is None:
         background = bpy.app.background
     if background:
-        build()
+        try:
+            build()
+        except Exception as exc:
+            _failed_build(str(exc))
+            raise
+        _build_error = ""
         return True
     if _process is not None and _process.poll() is None:
         return False   # still building
@@ -244,8 +280,15 @@ def ensure(background=None):
         "module = importlib.import_module(%r + '.ui.shelf_library'); module.build(%r)"
         % (str(package_dir.parent), package_dir.name, str(directory()))
     )
-    _process = subprocess.Popen([bpy.app.binary_path, "--background", "--factory-startup", "--python-expr", script],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _build_error = ""
+    try:
+        with (directory() / "shelf-build.log").open("w", encoding="utf-8") as log:
+            _process = subprocess.Popen([bpy.app.binary_path, "--background", "--factory-startup",
+                                         "--python-exit-code", "1", "--python-expr", script],
+                                        stdout=log, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        _failed_build(str(exc))
+        raise
     bpy.app.timers.register(_poll_build, first_interval=1.0)
     return False
 
@@ -261,8 +304,12 @@ def _deferred_ensure():
 
 def _poll_build():
     """Once the background build has landed, ask the open shelves to re-read the library."""
+    global _process
     if _process is not None and _process.poll() is None:
         return 1.0
+    if _process is not None and (_process.returncode or not current()):
+        _failed_build(f"Build exit: {_process.returncode}. Details: {directory() / 'shelf-build.log'}")
+    _process = None
     refresh_shelves()
     return None
 

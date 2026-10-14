@@ -456,6 +456,9 @@ def asset_type_buttons(self, context):
         return
     row = self.layout.row(align=True)
     row.menu("OP_MT_native_assets", text="Assets", icon="ASSET_MANAGER")
+    from . import shelf_library
+    if shelf_library.error_message():
+        row.operator("open_painter.refresh_assets", text="Retry Library", icon="ERROR")
     # One type filter button; the shelf's own catalog tabs do the same once enabled there.
     row.prop(context.scene.open_painter, "asset_category", text="")
     ui = selection.ui_state(context)
@@ -490,7 +493,7 @@ class OP_OT_refresh_assets(SafeOperator, bpy.types.Operator):
 
     def run(self, context):
         from . import shelf_library
-        shelf_library.ensure()
+        shelf_library.ensure(force=True)
         categories.refresh(None, context, refresh_sources=True)
         shelf_library.refresh_shelves()
 

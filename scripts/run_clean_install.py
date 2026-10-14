@@ -9,13 +9,14 @@ Blender and Unreal, disables and re-enables the extension and opens the project 
 """
 import argparse
 import json
-import os
 import platform
 import subprocess
 import sys
 import tempfile
 import tomllib
 from pathlib import Path
+
+from blender_test_profile import isolated_environment
 
 root = Path(__file__).resolve().parents[1]
 version = tomllib.loads((root / "blender_manifest.toml").read_text(encoding="utf-8"))["version"]
@@ -33,8 +34,9 @@ if not args.package.is_file():
     sys.exit(f"Package missing: {args.package}")
 profile = Path(tempfile.mkdtemp(prefix="op-clean-profile-"))
 work = Path(tempfile.mkdtemp(prefix="op-clean-install-"))
-env = dict(os.environ, BLENDER_USER_RESOURCES=str(profile), OP_CLEAN_INSTALL_ZIP=str(args.package.resolve()),
-           OP_CLEAN_INSTALL_DIR=str(work))
+env = isolated_environment(profile)
+env.update(OP_CLEAN_INSTALL_ZIP=str(args.package.resolve()), OP_CLEAN_INSTALL_DIR=str(work),
+           OP_CLEAN_INSTALL_PROFILE=str(profile))
 env.pop("PYTHONPATH", None)
 # As in blender_test_profile: Cycles on Metal keeps its base path-state count, or a cube's bake
 # passes the memory cap on a large Mac.
@@ -52,10 +54,11 @@ for phase in (1, 2):
     # does, with the preferences that phase 1 saved (the extension enabled).
     # Every Blender launch goes through the memory guard, one at a time.
     guard = [sys.executable, str(root / "scripts/run_guarded.py"), "--cap-gb", str(args.cap_gb),
+             "--timeout-seconds", "600",
              "--start-gb", "3", "--wait-seconds", "120", "--"]
     backend = ["--gpu-backend", args.gpu_backend] if args.gpu_backend else []
     completed = subprocess.run([*guard, args.blender, *(["--factory-startup"] if phase == 1 else []), *backend,
-                                "--enable-event-simulate", "--python",
+                                "--enable-event-simulate", "--python-exit-code", "1", "--python",
                                 str(root / "tests/integration/clean_install_ui.py"),
                                 *(["--", "-ApplePersistenceIgnoreState", "YES"] if sys.platform == "darwin" else [])],
                                cwd=work, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -66,6 +69,9 @@ for phase in (1, 2):
     if not report_path.is_file():
         print(completed.stdout[-3000:], completed.stderr[-3000:])
         sys.exit(f"Phase {phase} wrote no report")
+    if completed.returncode != 0:
+        print(completed.stdout[-3000:], completed.stderr[-3000:])
+        sys.exit(f"Phase {phase} exited with {completed.returncode} (profile {profile}, work {work})")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     reports[phase] = report
     print(f"phase {phase}: {report['status']} · {len(report['steps'])} steps")
